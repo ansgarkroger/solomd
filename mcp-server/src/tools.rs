@@ -869,15 +869,17 @@ impl SoloMdServer {
     /// like the other write tools, wherever `output_path` points. It used
     /// to treat outside-the-workspace paths as harmless "derived
     /// artifacts", which let a read-only server overwrite any file the
-    /// user could write. An existing file is never replaced unless the
-    /// caller passes `overwrite: true`, and missing folders are only
-    /// created inside the workspace.
+    /// user could write. The output must also stay inside the workspace
+    /// and carry the format's extension: with only an `overwrite` guard, a
+    /// prompt-injected note could have a `md` export (near-verbatim text)
+    /// replace `~/.zshrc` or `<vault>/.git/config`. An existing file is
+    /// never replaced unless the caller passes `overwrite: true`.
     ///
     /// The tool is only listed when the script and `node` were found at
     /// startup (see `SoloMdServer::new`): the app bundle ships neither.
     #[tool(
         name = "export_note",
-        description = "Export a Markdown note to html / md / txt / docx. Engine-parity with the SoloMD GUI export. Requires --allow-write (it writes a file). Args: `path` (workspace-relative), `format` (default html), optional `output_path` (default: sibling file next to `path` with format-appropriate extension; may be outside the workspace, but then its folder must exist), optional `overwrite` (default false: an existing output file is never replaced unless this is true), optional `number_headings` (promote plain-text numbered sections like 6.2 / 6.2.1 to headings, default false). Returns the absolute output path. Needs Node.js and a SoloMD source checkout with `pnpm install` run in app/."
+        description = "Export a Markdown note to html / md / txt / docx. Engine-parity with the SoloMD GUI export. Requires --allow-write (it writes a file). Args: `path` (workspace-relative), `format` (default html), optional `output_path` (default: sibling file next to `path` with format-appropriate extension; must be inside the workspace and end in the format's extension, e.g. .html/.htm, .md/.markdown, .txt, .docx; missing folders are created), optional `overwrite` (default false: an existing output file is never replaced unless this is true), optional `number_headings` (promote plain-text numbered sections like 6.2 / 6.2.1 to headings, default false). Returns the absolute output path. Needs Node.js and a SoloMD source checkout with `pnpm install` run in app/."
     )]
     pub async fn export_note(
         &self,
@@ -915,9 +917,37 @@ impl SoloMdServer {
         };
         let (output_path, inside_workspace) = safety::resolve_new(&workspace, &requested)
             .map_err(|e| McpError::invalid_params(e, None))?;
+        if !inside_workspace {
+            return Err(McpError::invalid_params(
+                format!(
+                    "output_path {} is outside the workspace; export_note only writes inside it",
+                    output_path.display()
+                ),
+                None,
+            ));
+        }
         if output_path == input_path {
             return Err(McpError::invalid_params(
                 "output_path is the source note itself; pick another file",
+                None,
+            ));
+        }
+        let ext = output_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let ext_matches = match fmt.as_str() {
+            "html" => matches!(ext.as_str(), "html" | "htm"),
+            "md" => matches!(ext.as_str(), "md" | "markdown"),
+            other => ext == other,
+        };
+        if !ext_matches {
+            return Err(McpError::invalid_params(
+                format!(
+                    "output_path {} must end in .{fmt} for a {fmt} export",
+                    output_path.display()
+                ),
                 None,
             ));
         }
@@ -930,19 +960,9 @@ impl SoloMdServer {
                 None,
             ));
         }
-        match output_path.parent() {
-            Some(parent) if inside_workspace => std::fs::create_dir_all(parent)
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?,
-            Some(parent) if !parent.is_dir() => {
-                return Err(McpError::invalid_params(
-                    format!(
-                        "folder does not exist: {} (export_note only creates folders inside the workspace)",
-                        parent.display()
-                    ),
-                    None,
-                ));
-            }
-            _ => {}
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         }
 
         let script = find_export_script().map_err(|e| {

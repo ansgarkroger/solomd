@@ -90,8 +90,7 @@ pub fn resolve_subfolder(workspace: &Path, input: &str) -> Result<PathBuf, Strin
 /// part below the deepest existing ancestor cannot climb back out. That
 /// ancestor is canonicalised, which resolves any symlinked folder before
 /// the inside/outside decision is made. Callers decide what an outside
-/// path means: `write_note` refuses it, `export_note` allows it behind
-/// `--allow-write` and an explicit `overwrite` for existing files.
+/// path means; `write_note` and `export_note` both refuse it.
 pub fn resolve_new(workspace: &Path, input: &str) -> Result<(PathBuf, bool), String> {
     if input.is_empty() {
         return Err("path must not be empty".into());

@@ -65,7 +65,7 @@ opened on demand for each call.
 | `write_note` | Create a `.md` / `.markdown` / `.txt` note (missing folders inside the workspace are created). Replaces an existing note only with `allow_overwrite: true`. | `--allow-write` |
 | `append_to_note` | Append text to an existing note (newline-safe). | `--allow-write` |
 | `autogit_rollback` | Restore a note's content from an AutoGit commit. | `--allow-write` |
-| `export_note` | Export a note to html / md / txt / docx. `output_path` may be outside the workspace (its folder must exist); an existing file is replaced only with `overwrite: true`. | `--allow-write`, and listed only when the Node backend is found (below) |
+| `export_note` | Export a note to html / md / txt / docx. `output_path` must be inside the workspace and end in the format's extension; an existing file is replaced only with `overwrite: true`. | `--allow-write`, and listed only when the Node backend is found (below) |
 
 That is 16 tools. Read-only by default. Write tools are also offered
 through the MCP `tools/list` response so clients can show them, but
@@ -228,10 +228,9 @@ for finer-grained control.
 
 * Every input path is canonicalised and verified to live inside the
   workspace before any read/write. Both `..` segments and absolute paths
-  outside the workspace are rejected. The one tool that may write outside
-  the workspace is `export_note`, and only with `--allow-write`; it never
-  creates folders there and never replaces an existing file unless the call
-  passes `overwrite: true`.
+  outside the workspace are rejected. No tool writes outside the workspace;
+  `export_note` also only writes files with its format's extension and
+  never replaces an existing file unless the call passes `overwrite: true`.
 * The watcher / index from the SoloMD desktop app is **not** used here —
   this is a stateless per-invocation server that walks the filesystem
   lazily.

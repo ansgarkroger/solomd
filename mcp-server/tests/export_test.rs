@@ -132,7 +132,7 @@ fn export_note_docx_preserves_blockquote_text() {
         return;
     }
     let ws = fresh_dir("blockquote");
-    let out_dir = fresh_dir("blockquote-out");
+    let out_dir = ws.join("out");
     std::fs::write(
         ws.join("note.md"),
         "# Document\n\nNormal paragraph.\n\n> first quoted line\n> second quoted line\n\nAfter the quote.\n",
@@ -171,7 +171,7 @@ fn export_note_html_preserves_blockquote_text() {
         return;
     }
     let ws = fresh_dir("html");
-    let out_dir = fresh_dir("html-out");
+    let out_dir = ws.join("out");
     std::fs::write(ws.join("note.md"), "# T\n\n> hello quoted\n").unwrap();
     let out = out_dir.join("note.html");
 
@@ -239,7 +239,7 @@ fn export_note_docx_embeds_relative_images_and_keeps_math() {
         return;
     }
     let ws = fresh_dir("docx-img");
-    let out_dir = fresh_dir("docx-img-out");
+    let out_dir = ws.join("out");
     std::fs::create_dir_all(ws.join("attachments")).unwrap();
     std::fs::write(ws.join("attachments/x.png"), TINY_PNG).unwrap();
     std::fs::write(
@@ -278,7 +278,7 @@ fn export_note_html_strips_front_matter_and_embeds_katex_css() {
         return;
     }
     let ws = fresh_dir("html-math");
-    let out_dir = fresh_dir("html-math-out");
+    let out_dir = ws.join("out");
     std::fs::write(ws.join("note.md"), "---\ntitle: Secret Meta\n---\n# T\n\nInline $E = mc^2$.\n").unwrap();
     let out = out_dir.join("note.html");
     let resp = drive_export(

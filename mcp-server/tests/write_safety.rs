@@ -149,37 +149,53 @@ fn export_note_with_flag_writes_but_never_overwrites_silently() {
     let ws = fresh_dir("rw");
     let outside = fresh_dir("rw-outside");
     std::fs::write(ws.join("note.md"), "# Note\n\nfresh body\n").unwrap();
+    let kept = ws.join("kept.txt");
+    std::fs::write(&kept, "IMPORTANT USER DATA\n").unwrap();
+    std::fs::create_dir_all(ws.join(".git")).unwrap();
+    let git_config = ws.join(".git/config");
+    std::fs::write(&git_config, "[core]\n").unwrap();
     let precious = outside.join("precious.txt");
     std::fs::write(&precious, "IMPORTANT USER DATA\n").unwrap();
-    let new_out = outside.join("new.html");
 
     let frames = call(
         &ws,
         true,
         &[
-            ("export_note", serde_json::json!({"path": "note.md", "format": "html", "output_path": new_out.to_string_lossy()})),
-            ("export_note", serde_json::json!({"path": "note.md", "format": "txt", "output_path": precious.to_string_lossy()})),
+            ("export_note", serde_json::json!({"path": "note.md", "format": "txt", "output_path": "kept.txt"})),
             ("export_note", serde_json::json!({"path": "note.md", "format": "html", "output_path": "exports/deep/note.html"})),
+            ("export_note", serde_json::json!({"path": "note.md", "format": "txt", "output_path": "kept.txt", "overwrite": true})),
+            ("export_note", serde_json::json!({"path": "note.md", "format": "md", "output_path": "note.md", "overwrite": true})),
+            // Outside the workspace: refused, new file or not, overwrite or not.
+            ("export_note", serde_json::json!({"path": "note.md", "format": "html", "output_path": outside.join("new.html").to_string_lossy()})),
             ("export_note", serde_json::json!({"path": "note.md", "format": "txt", "output_path": precious.to_string_lossy(), "overwrite": true})),
             ("export_note", serde_json::json!({"path": "note.md", "format": "html", "output_path": outside.join("no/such/dir/x.html").to_string_lossy()})),
-            ("export_note", serde_json::json!({"path": "note.md", "format": "md", "output_path": "note.md", "overwrite": true})),
+            // Inside, but not a file of the export's type.
+            ("export_note", serde_json::json!({"path": "note.md", "format": "md", "output_path": ".git/config", "overwrite": true})),
+            ("export_note", serde_json::json!({"path": "note.md", "format": "html", "output_path": "page.txt"})),
         ],
     );
 
-    assert!(frames[0].get("error").is_none(), "new outside file should be written: {}", frames[0]);
-    assert!(std::fs::read_to_string(&new_out).unwrap().contains("fresh body"));
-
-    let msg = error_message(&frames[1]);
+    let msg = error_message(&frames[0]);
     assert!(msg.contains("overwrite"), "got: {msg}");
-    assert!(frames[2].get("error").is_none(), "inside export into new folders: {}", frames[2]);
+    assert!(frames[1].get("error").is_none(), "inside export into new folders: {}", frames[1]);
     assert!(ws.join("exports/deep/note.html").is_file());
 
-    assert!(frames[3].get("error").is_none(), "overwrite:true should replace: {}", frames[3]);
-    assert!(std::fs::read_to_string(&precious).unwrap().contains("fresh body"));
+    assert!(frames[2].get("error").is_none(), "overwrite:true should replace: {}", frames[2]);
+    assert!(std::fs::read_to_string(&kept).unwrap().contains("fresh body"));
+    assert!(error_message(&frames[3]).contains("source note"));
 
-    assert!(error_message(&frames[4]).contains("folder does not exist"));
+    for f in &frames[4..7] {
+        assert!(error_message(f).contains("outside the workspace"), "got: {f}");
+    }
+    assert!(!outside.join("new.html").exists());
+    assert_eq!(std::fs::read_to_string(&precious).unwrap(), "IMPORTANT USER DATA\n");
     assert!(!outside.join("no").exists(), "must not create folders outside the workspace");
-    assert!(error_message(&frames[5]).contains("source note"));
+
+    for f in &frames[7..9] {
+        assert!(error_message(f).contains("must end in"), "got: {f}");
+    }
+    assert_eq!(std::fs::read_to_string(&git_config).unwrap(), "[core]\n");
+    assert!(!ws.join("page.txt").exists());
 }
 
 #[test]
