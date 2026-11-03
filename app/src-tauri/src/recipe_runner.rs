@@ -1024,6 +1024,84 @@ fn create_agent_branch(workspace: &Path, branch: &str) -> Result<(), String> {
 // `dispatch_tool`) is much more invasive and was deferred. See:
 //   TODO(v4-recipe-watcher): suppress watcher reloads on recipe writes.
 
+/// Each keyed provider's own endpoint — mirrors `defaultBaseUrl` in
+/// `src/lib/ai-providers.ts`. Keyless providers (ollama, openai-compat)
+/// have none: they are whatever server the user runs.
+fn provider_default_base(provider: &str) -> Option<&'static str> {
+    Some(match provider {
+        "openai" => "https://api.openai.com/v1",
+        "anthropic" | "claude" => "https://api.anthropic.com",
+        "gemini" => "https://generativelanguage.googleapis.com/v1beta/openai",
+        "xai" => "https://api.x.ai/v1",
+        "mistral" => "https://api.mistral.ai/v1",
+        "groq" => "https://api.groq.com/openai/v1",
+        "deepseek" => "https://api.deepseek.com/v1",
+        "qwen" => "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "glm" => "https://open.bigmodel.cn/api/paas/v4",
+        "kimi" => "https://api.moonshot.cn/v1",
+        "volcengine" => "https://ark.cn-beijing.volces.com/api/v3",
+        "siliconflow" => "https://api.siliconflow.cn/v1",
+        "minimax" => "https://api.minimax.io/v1",
+        "openrouter" => "https://openrouter.ai/api/v1",
+        "opencode-go" => "https://opencode.ai/zen/go/v1",
+        _ => return None,
+    })
+}
+
+fn is_loopback_url(url: &reqwest::Url) -> bool {
+    let host = url.host_str().unwrap_or("");
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || host.to_ascii_lowercase().ends_with(".localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
+}
+
+/// The base URL a recipe run talks to. Without a `base_url` in the
+/// recipe that is the provider's own endpoint (not OpenAI's, which is
+/// `ai_proxy`'s fallback for every OpenAI-format provider). With one,
+/// and a stored key about to be attached, the URL must be the provider's
+/// own origin or a loopback address — otherwise a recipe planted in a
+/// cloned workspace could send the key to a server of its choosing.
+fn recipe_base_url(
+    provider: &str,
+    api_format: &str,
+    requested: Option<&str>,
+    sends_key: bool,
+) -> Result<Option<String>, String> {
+    if api_format == "ollama" {
+        return Ok(requested.map(str::to_string));
+    }
+    let official = provider_default_base(provider);
+    let requested = requested.map(str::trim).filter(|s| !s.is_empty());
+    let Some(raw) = requested else {
+        return Ok(official.map(str::to_string));
+    };
+    let base = if api_format == "openai" {
+        ai_proxy::normalize_openai_base(raw).unwrap_or_else(|| raw.to_string())
+    } else {
+        raw.trim_end_matches('/').to_string()
+    };
+    if !sends_key {
+        return Ok(Some(base));
+    }
+    let url = reqwest::Url::parse(&base).map_err(|e| format!("invalid base_url '{base}': {e}"))?;
+    let same_origin = official
+        .and_then(|o| reqwest::Url::parse(o).ok())
+        .map(|o| o.origin() == url.origin())
+        .unwrap_or(false);
+    if same_origin || is_loopback_url(&url) {
+        Ok(Some(base))
+    } else {
+        Err(format!(
+            "base_url '{base}' is not {provider}'s own endpoint or a local server; \
+             refusing to send the stored {provider} API key there"
+        ))
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_recipe_chat_loop(
     app: &AppHandle,
@@ -1094,6 +1172,17 @@ async fn run_recipe_chat_loop(
         }
     };
 
+    // A recipe is a file inside the workspace, so whoever wrote the
+    // workspace chooses its `base_url`. The stored key only ever goes to
+    // the provider's own endpoint or to this machine.
+    let base_url = recipe_base_url(
+        &canonical_provider,
+        &api_format,
+        recipe.base_url.as_deref(),
+        !api_key.is_empty(),
+    )
+    .map_err(|e| format!("recipe '{}': {e}", recipe.slug))?;
+
     // ----- 2. Build ChatRequest -----
     // System prompt mirrors the panel's contract for tool-enabled chats:
     // tell the model the tool registry it has and the write cap. The loop
@@ -1125,7 +1214,7 @@ async fn run_recipe_chat_loop(
         api_format: Some(api_format.clone()),
         model: model.clone(),
         messages,
-        base_url: recipe.base_url.clone(),
+        base_url,
         tools: Some(recipe.tools.clone()),
         allow_write: Some(recipe.allow_write),
         run_id: Some(run_id.to_string()),
@@ -1614,5 +1703,58 @@ mod tests {
             tools: vec![],
         };
         assert_eq!(provider_for(&r), "anthropic");
+    }
+
+    #[test]
+    fn recipe_base_url_defaults_to_the_providers_own_endpoint() {
+        assert_eq!(
+            recipe_base_url("deepseek", "openai", None, true).unwrap().as_deref(),
+            Some("https://api.deepseek.com/v1")
+        );
+        assert_eq!(
+            recipe_base_url("anthropic", "anthropic", Some("  "), true).unwrap().as_deref(),
+            Some("https://api.anthropic.com")
+        );
+    }
+
+    #[test]
+    fn recipe_base_url_accepts_official_origin_and_loopback() {
+        assert_eq!(
+            recipe_base_url("openai", "openai", Some("https://api.openai.com"), true).unwrap().as_deref(),
+            Some("https://api.openai.com/v1")
+        );
+        for local in ["http://localhost:4000", "http://127.0.0.1:8080/v1", "http://[::1]:9000"] {
+            assert!(recipe_base_url("openai", "openai", Some(local), true).is_ok(), "{local}");
+        }
+        assert!(recipe_base_url("openai-compat", "openai", Some("localhost:8080"), true).is_ok());
+    }
+
+    #[test]
+    fn recipe_base_url_refuses_to_send_a_key_elsewhere() {
+        for evil in [
+            "https://evil.example/v1",
+            "https://api.openai.com.evil.example/v1",
+            "https://api.openai.com@evil.example/v1",
+            "http://api.openai.com/v1",
+            "https://api.openai.com:8443/v1",
+        ] {
+            assert!(recipe_base_url("openai", "openai", Some(evil), true).is_err(), "{evil}");
+        }
+        assert!(recipe_base_url("anthropic", "anthropic", Some("https://evil.example"), true).is_err());
+        assert!(recipe_base_url("openai-compat", "openai", Some("https://lan-box.example"), true).is_err());
+    }
+
+    #[test]
+    fn recipe_base_url_leaves_keyless_runs_alone() {
+        assert_eq!(
+            recipe_base_url("openai-compat", "openai", Some("https://lan-box.example/v1"), false)
+                .unwrap()
+                .as_deref(),
+            Some("https://lan-box.example/v1")
+        );
+        assert_eq!(
+            recipe_base_url("ollama", "ollama", Some("http://gpu-box:11434"), false).unwrap().as_deref(),
+            Some("http://gpu-box:11434")
+        );
     }
 }

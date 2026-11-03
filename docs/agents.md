@@ -57,6 +57,12 @@ A few subtleties worth knowing:
   LM Studio, vLLM, LocalAI, an internal gateway. Set `base_url:` to the address the server printed
   at startup; a bare `host:port` gets `/v1` appended. No API key is required (store one only if
   your server sits behind an authenticating proxy).
+- **A stored API key only goes to the provider's own endpoint or to this machine.** A recipe is a
+  file in the workspace, so a cloned vault could otherwise point `base_url:` at any server and
+  collect your key. With a key stored for the provider, `base_url:` must have the provider's own
+  origin (e.g. `https://api.openai.com`) or a loopback host (`localhost`, `127.0.0.1`, `[::1]`);
+  anything else fails the run. A keyless `openai-compat` or `ollama` server on the LAN still works.
+  Without `base_url:`, a recipe uses its provider's own endpoint.
 
 ---
 
