@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "SoloMD",
+  "productName": "SoloMD (ak)",
   "version": "5.0.12",
   "identifier": "app.solomd",
   "build": {
